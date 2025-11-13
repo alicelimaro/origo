@@ -14,6 +14,7 @@
 (define-constant ERR-INSUFFICIENT-REPUTATION (err u415))
 (define-constant ERR-ATTESTATION-LIMIT-REACHED (err u416))
 (define-constant ERR-INVALID-WEIGHT (err u417))
+(define-constant BURN-ADDRESS 'SP000000000000000000002Q6VF78)
 
 ;; Minimum reputation required to give weighted attestations
 (define-constant MIN-REPUTATION-TO-ATTEST u5)
@@ -62,7 +63,7 @@
 )
 
 (define-data-var tag-count uint u0)
-(define-data-var contract-owner principal tx-sender)
+(define-data-var contract-owner principal BURN-ADDRESS)
 (define-data-var initialized bool false)
 
 (define-map tag-list
@@ -73,7 +74,7 @@
 ;; === Enhanced Helper Functions ===
 
 (define-private (is-valid-principal (user principal))
-  (not (is-eq user 'SP000000000000000000002Q6VF78))
+  (not (is-eq user BURN-ADDRESS))
 )
 
 (define-private (is-admin (user principal))
@@ -158,10 +159,20 @@
         (let (
           (decay-factor (/ blocks-since-decay (* BLOCKS-PER-DAY u30)))
           (decayed-score (if (> current-score decay-factor) (- current-score decay-factor) u0))
+          (decay-amount (if (> current-score decayed-score) (- current-score decayed-score) u0))
         )
-          (map-set reputation { user: user, tag: tag } 
-            { count: (get count some-rep), weighted-score: decayed-score, last-decay: stacks-block-height })
-          decayed-score
+          (begin
+            (map-set reputation { user: user, tag: tag } 
+              { count: (get count some-rep), weighted-score: decayed-score, last-decay: stacks-block-height })
+            (if (> decay-amount u0)
+              (begin
+                (update-total-reputation user tag (- 0 (to-int decay-amount)))
+                true
+              )
+              true
+            )
+            decayed-score
+          )
         )
         current-score
       )
@@ -172,11 +183,17 @@
 
 ;; === Initialization Function ===
 (define-public (initialize)
-  (let ((sender tx-sender))
+  (let (
+    (sender tx-sender)
+    (current-owner (var-get contract-owner))
+  )
     (begin
       (asserts! (not (var-get initialized)) ERR-UNAUTHORIZED)
-      (asserts! (is-eq sender (var-get contract-owner)) ERR-UNAUTHORIZED)
       (asserts! (is-valid-principal sender) ERR-INVALID-PRINCIPAL)
+      (if (is-eq current-owner BURN-ADDRESS)
+        (var-set contract-owner sender)
+        (asserts! (is-eq sender current-owner) ERR-UNAUTHORIZED)
+      )
       (map-set admins { user: sender } { is-admin: true })
       (var-set initialized true)
       (ok true)
